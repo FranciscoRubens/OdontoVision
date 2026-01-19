@@ -11,6 +11,7 @@ import time
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+import os
 
 # ==========================================
 # 🦷 CONFIGURAÇÃO INICIAL
@@ -21,7 +22,8 @@ st.set_page_config(
     layout="wide"
 )
 
-default_banner = r"D:\\OneDrive\\Documentos\\testeModularizado\\dente5.png"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+default_banner = os.path.join(BASE_DIR, "assets", "dente5.png")
 
 # ==========================================
 # ⚙️ CARREGAR MODELO
