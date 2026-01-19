@@ -45,9 +45,7 @@ for key, default_value in {
     "mask_for_download": None,
     "processing": False,
     "show_results": False,
-    "uploader_key": 0,
-    "show_clear_success": False,
-    "clear_stage": 0
+    "show_clear_success": False
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
@@ -73,8 +71,7 @@ with st.sidebar:
 
     uploaded_file = st.file_uploader(
         "SELECIONE UMA RADIOGRAFIA",
-        type=["png", "jpg", "jpeg"],
-        key=f"uploader_{st.session_state.uploader_key}"
+        type=["png", "jpg", "jpeg"]
     )
 
     if uploaded_file is None and st.session_state.radiografia is not None:
@@ -82,7 +79,6 @@ with st.sidebar:
         st.session_state.mask = None
         st.session_state.mask_for_download = None
         st.session_state.show_results = False
-        st.session_state.clear_stage = 0
 
     if uploaded_file:
         try:
@@ -90,7 +86,6 @@ with st.sidebar:
             st.session_state.show_results = False
             st.session_state.mask = None
             st.session_state.mask_for_download = None
-            st.session_state.clear_stage = 0
         except UnidentifiedImageError:
             st.error("Arquivo inválido. Tente PNG ou JPG.")
 
@@ -113,22 +108,11 @@ with st.sidebar:
 
     with col2:
         if st.button("Limpar", use_container_width=True):
-            if st.session_state.clear_stage == 0:
-                st.session_state.mask = None
-                st.session_state.mask_for_download = None
-                st.session_state.show_results = False
-                st.session_state.show_clear_success = True
-                st.session_state.clear_stage = 1
-            else:
-                st.session_state.radiografia = None
-                st.session_state.mask = None
-                st.session_state.mask_for_download = None
-                st.session_state.show_results = False
-                st.session_state.uploader_key += 1
-                st.session_state.clear_stage = 0
-                st.session_state.show_clear_success = True
-                st.success("Radiografia removida com sucesso ✅")
-                st.rerun()
+            st.session_state.radiografia = None
+            st.session_state.mask = None
+            st.session_state.mask_for_download = None
+            st.session_state.show_results = False
+            st.session_state.show_clear_success = True
 
     st.divider()
     st.caption("Desenvolvido para fins acadêmicos — OdontoVision © 2025")
@@ -153,7 +137,7 @@ st.markdown(
 # ==========================================
 # 🚀 MENSAGEM DE SUCESSO
 # ==========================================
-if st.session_state.show_clear_success and st.session_state.clear_stage == 1:
+if st.session_state.show_clear_success:
     st.success("Segmentação removida com sucesso ✅")
     st.session_state.show_clear_success = False
 
@@ -170,7 +154,7 @@ if st.session_state.radiografia and st.session_state.show_results:
             augmented = transform(image=img_np)
             input_tensor = augmented["image"].unsqueeze(0).to(device)
 
-            # 🔹 Warm-up (opcional, mas recomendado)
+            # 🔹 Warm-up
             with torch.no_grad():
                 _ = model(input_tensor)
 
