@@ -65,7 +65,7 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.image(default_banner, width="stretch")
+    st.image(default_banner, use_column_width=True)
     st.divider()
     st.header("UPLOAD DA RADIOGRAFIA")
 
@@ -93,7 +93,7 @@ with st.sidebar:
         st.image(
             st.session_state.radiografia,
             caption="Pré-visualização",
-            width="stretch"
+            use_column_width=True
         )
 
     col1, col2 = st.columns(2)
@@ -164,7 +164,6 @@ if st.session_state.radiografia and st.session_state.show_results:
                     torch.cuda.synchronize()
 
                 start_time = time.perf_counter()
-
                 pred = model(input_tensor)
 
                 if device.type == "cuda":
@@ -242,7 +241,11 @@ def gerar_pdf(radiografia, mask, logo_path):
     c.drawCentredString(3 * width / 4, y_pos + img_height + 25, "Máscara Segmentada")
 
     c.setFont("Helvetica", 11)
-    c.drawCentredString(width / 2, 30, "Relatório gerado automaticamente — OdontoVision © 2025")
+    c.drawCentredString(
+        width / 2,
+        30,
+        "Relatório gerado automaticamente — OdontoVision © 2025"
+    )
 
     c.showPage()
     c.save()
@@ -258,9 +261,17 @@ if st.session_state.mask is not None and st.session_state.radiografia is not Non
 
     col1, col2 = st.columns(2)
     with col1:
-        st.image(st.session_state.radiografia, caption="Radiografia Original", width="stretch")
+        st.image(
+            st.session_state.radiografia,
+            caption="Radiografia Original",
+            use_column_width=True
+        )
     with col2:
-        st.image(st.session_state.mask, caption="Máscara Segmentada", width="stretch")
+        st.image(
+            st.session_state.mask,
+            caption="Máscara Segmentada",
+            use_column_width=True
+        )
 
     pdf_buffer = gerar_pdf(
         st.session_state.radiografia,
