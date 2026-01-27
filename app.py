@@ -7,11 +7,12 @@ from transforms import get_inference_transform
 import io
 import base64
 import time
+import os
 
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-import os
+
 
 # ==========================================
 # 🦷 CONFIGURAÇÃO INICIAL
@@ -25,50 +26,53 @@ st.set_page_config(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 default_banner = os.path.join(BASE_DIR, "assets", "dente5.png")
 
+
 # ==========================================
 # ⚙️ CARREGAR MODELO
 # ==========================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = AttentionUNet().to(device)
-model.load_state_dict(
-    torch.load("AttUNet_final_trained.pt", map_location=device)
-)
+
+model_path = os.path.join(BASE_DIR, "AttUNet_final_trained.pt")
+state_dict = torch.load(model_path, map_location=device)
+model.load_state_dict(state_dict)
 model.eval()
 
-
 transform = get_inference_transform()
+
 
 # ==========================================
 # 📂 ESTADOS DE SESSÃO
 # ==========================================
-for key, default_value in {
+default_session = {
     "radiografia": None,
     "mask": None,
     "mask_for_download": None,
     "processing": False,
     "show_results": False,
     "show_clear_success": False
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default_value
+}
+
+for k, v in default_session.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
 
 # ==========================================
 # 🧭 SIDEBAR
 # ==========================================
-st.markdown(
-    """
-    <style>
-        [data-testid="stSidebar"] {
-            background-color: #CAE9F5;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {
+        background-color: #CAE9F5;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 
 with st.sidebar:
-    st.image(default_banner, width="stretch")
+    st.image(default_banner, use_column_width=True)
     st.divider()
     st.header("UPLOAD DA RADIOGRAFIA")
 
@@ -78,10 +82,7 @@ with st.sidebar:
     )
 
     if uploaded_file is None and st.session_state.radiografia is not None:
-        st.session_state.radiografia = None
-        st.session_state.mask = None
-        st.session_state.mask_for_download = None
-        st.session_state.show_results = False
+        st.session_state.update(default_session)
 
     if uploaded_file:
         try:
@@ -96,13 +97,13 @@ with st.sidebar:
         st.image(
             st.session_state.radiografia,
             caption="Pré-visualização",
-            width="stretch"
+            use_column_width=True
         )
 
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("Segmentar", width="stretch"):
+        if st.button("Segmentar", use_container_width=True):
             if st.session_state.radiografia is not None:
                 st.session_state.processing = True
                 st.session_state.show_results = True
@@ -110,15 +111,13 @@ with st.sidebar:
                 st.session_state.mask_for_download = None
 
     with col2:
-        if st.button("Limpar", width="stretch"):
-            st.session_state.radiografia = None
-            st.session_state.mask = None
-            st.session_state.mask_for_download = None
-            st.session_state.show_results = False
+        if st.button("Limpar", use_container_width=True):
+            st.session_state.update(default_session)
             st.session_state.show_clear_success = True
 
     st.divider()
     st.caption("Desenvolvido para fins acadêmicos — OdontoVision © 2025")
+
 
 # ==========================================
 # 🩻 TÍTULO PRINCIPAL
@@ -137,12 +136,14 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 # ==========================================
 # 🚀 MENSAGEM DE SUCESSO
 # ==========================================
 if st.session_state.show_clear_success:
     st.success("Segmentação removida com sucesso ✅")
     st.session_state.show_clear_success = False
+
 
 # ==========================================
 # 🔍 PROCESSAMENTO + TEMPO COMPUTACIONAL
@@ -157,43 +158,34 @@ if st.session_state.radiografia and st.session_state.show_results:
             augmented = transform(image=img_np)
             input_tensor = augmented["image"].unsqueeze(0).to(device)
 
-            # 🔹 Warm-up (não contabilizado)
             with torch.no_grad():
                 _ = model(input_tensor)
 
-            # 🔹 Medição do tempo computacional de inferência
             with torch.no_grad():
                 if device.type == "cuda":
                     torch.cuda.synchronize()
 
-                start_time = time.perf_counter()
+                start = time.perf_counter()
                 pred = model(input_tensor)
 
                 if device.type == "cuda":
                     torch.cuda.synchronize()
 
-                end_time = time.perf_counter()
+                tempo = (time.perf_counter() - start)
 
-                tempo_computacional = end_time - start_time  # segundos
-
-                print(
-                    f"[INFO] Tempo computacional de inferência: "
-                    f"{tempo_computacional * 1000:.2f} ms"
-                )
+                print(f"[INFO] Inferência: {tempo*1000:.2f} ms")
 
                 if isinstance(pred, list):
                     pred = pred[-1]
 
-                mask = (
-                    (pred.squeeze().cpu().numpy() > 0.5)
-                    .astype(np.uint8) * 255
-                )
+                mask = (pred.squeeze().cpu().numpy() > 0.5).astype(np.uint8) * 255
 
             st.session_state.mask = mask
             st.session_state.mask_for_download = Image.fromarray(mask)
 
+
 # ==========================================
-# 🧾 FUNÇÃO PARA GERAR PDF
+# 🧾 GERAR PDF
 # ==========================================
 def gerar_pdf(radiografia, mask, logo_path):
     pdf_buffer = io.BytesIO()
@@ -205,22 +197,19 @@ def gerar_pdf(radiografia, mask, logo_path):
         logo_io = io.BytesIO()
         logo.save(logo_io, format="PNG")
         logo_io.seek(0)
-        c.drawImage(
-            ImageReader(logo_io),
-            (width - 130) / 2,
-            height - 95,
-            width=130,
-            height=68,
-            mask="auto"
-        )
-    except Exception:
+        c.drawImage(ImageReader(logo_io),
+                    (width - 130) / 2,
+                    height - 95,
+                    width=130, height=68,
+                    mask="auto")
+    except:
         pass
 
-    img_width, img_height = 380, 195
+    img_w, img_h = 380, 195
     spacing = 40
 
-    radiografia = radiografia.resize((img_width, img_height))
-    mask = mask.resize((img_width, img_height))
+    radiografia = radiografia.resize((img_w, img_h))
+    mask = mask.resize((img_w, img_h))
 
     rad_io, mask_io = io.BytesIO(), io.BytesIO()
     radiografia.save(rad_io, format="PNG")
@@ -228,53 +217,47 @@ def gerar_pdf(radiografia, mask, logo_path):
     rad_io.seek(0)
     mask_io.seek(0)
 
-    start_x = (width - (img_width * 2 + spacing)) / 2
-    y_pos = (height - img_height) / 2 - 40
+    start_x = (width - (img_w * 2 + spacing)) / 2
+    y_pos = (height - img_h) / 2 - 40
 
-    c.drawImage(ImageReader(rad_io), start_x, y_pos, img_width, img_height)
-    c.drawImage(
-        ImageReader(mask_io),
-        start_x + img_width + spacing,
-        y_pos,
-        img_width,
-        img_height
-    )
+    c.drawImage(ImageReader(rad_io), start_x, y_pos, img_w, img_h)
+    c.drawImage(ImageReader(mask_io), start_x + img_w + spacing, y_pos, img_w, img_h)
 
     c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(width / 4, y_pos + img_height + 25, "Radiografia Original")
-    c.drawCentredString(3 * width / 4, y_pos + img_height + 25, "Máscara Segmentada")
+    c.drawCentredString(width / 4, y_pos + img_h + 25, "Radiografia Original")
+    c.drawCentredString(3 * width / 4, y_pos + img_h + 25, "Máscara Segmentada")
 
     c.setFont("Helvetica", 11)
-    c.drawCentredString(
-        width / 2,
-        30,
-        "Relatório gerado automaticamente — OdontoVision © 2025"
-    )
+    c.drawCentredString(width / 2, 30,
+                        "Relatório gerado automaticamente — OdontoVision © 2025")
 
     c.showPage()
     c.save()
-
     pdf_buffer.seek(0)
     return pdf_buffer
+
 
 # ==========================================
 # ✅ EXIBIÇÃO DO RESULTADO
 # ==========================================
 if st.session_state.mask is not None and st.session_state.radiografia is not None:
+
     st.subheader("Resultado da Segmentação")
 
     col1, col2 = st.columns(2)
+
     with col1:
         st.image(
             st.session_state.radiografia,
             caption="Radiografia Original",
-            width="stretch"
+            use_column_width=True
         )
+
     with col2:
         st.image(
             st.session_state.mask,
             caption="Máscara Segmentada",
-            width="stretch"
+            use_column_width=True
         )
 
     pdf_buffer = gerar_pdf(
@@ -283,22 +266,21 @@ if st.session_state.mask is not None and st.session_state.radiografia is not Non
         default_banner
     )
 
-    pdf_data = pdf_buffer.getvalue()
-    b64_pdf = base64.b64encode(pdf_data).decode()
+    b64 = base64.b64encode(pdf_buffer.getvalue()).decode()
 
     st.markdown(
         f"""
-        <a href="data:application/pdf;base64,{b64_pdf}"
+        <a href="data:application/pdf;base64,{b64}"
            download="segmentacao_radiografia.pdf"
            style="
-                display: inline-block;
-                background-color: white;
-                color: black;
-                border: 1px solid #ccc;
-                padding: 10px 20px;
-                border-radius: 8px;
-                text-decoration: none;
-                font-weight: bold;
+                display:inline-block;
+                background:white;
+                color:black;
+                border:1px solid #ccc;
+                padding:10px 20px;
+                border-radius:8px;
+                text-decoration:none;
+                font-weight:bold;
            ">
             📄 Baixar PDF
         </a>
