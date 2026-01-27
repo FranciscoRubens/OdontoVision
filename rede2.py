@@ -1,105 +1,101 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F 
+import torch.nn.functional as F
 
-# Blocos da U-Net++ 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+# BLOCO CONVOLUCIONAL
+class DoubleConv(nn.Module):
+    def __init__(self, in_c, out_c):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=1),
-            nn.BatchNorm2d(out_channels),
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_c),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, 3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_c),
+            nn.ReLU(inplace=True),
         )
+
     def forward(self, x):
-        return self.block(x)
+        return self.conv(x)
 
 
-class UpBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
+# ATTENTION GATE
+class AttentionGate(nn.Module):
+    def __init__(self, F_g, F_l, F_int):
         super().__init__()
-        self.up = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
-            nn.Conv2d(in_channels, out_channels, 1)
+        self.W_g = nn.Sequential(
+            nn.Conv2d(F_g, F_int, 1, stride=1, padding=0),
+            nn.BatchNorm2d(F_int)
         )
-    def forward(self, x):
-        return self.up(x)
+        self.W_x = nn.Sequential(
+            nn.Conv2d(F_l, F_int, 1, stride=1, padding=0),
+            nn.BatchNorm2d(F_int)
+        )
+        self.psi = nn.Sequential(
+            nn.Conv2d(F_int, 1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, g, x):
+        g1 = self.W_g(g)
+        x1 = self.W_x(x)
+        if g1.shape != x1.shape:
+            g1 = F.interpolate(g1, size=x1.shape[2:], mode='bilinear', align_corners=True)
+        psi = self.relu(g1 + x1)
+        psi = self.psi(psi)
+        return x * psi
 
 
-class UNetPlusPlus(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1, base_filters=32, deep_supervision=True):
+# ATTENTION U-NET
+class AttentionUNet(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.deep_supervision = deep_supervision
-        f = base_filters
+        self.dconv_down1 = DoubleConv(1, 64)
+        self.dconv_down2 = DoubleConv(64, 128)
+        self.dconv_down3 = DoubleConv(128, 256)
+        self.dconv_down4 = DoubleConv(256, 512)
 
-        # === Encoder ===
-        self.conv00 = ConvBlock(in_channels, f)
-        self.conv10 = ConvBlock(f, f*2)
-        self.conv20 = ConvBlock(f*2, f*4)
-        self.conv30 = ConvBlock(f*4, f*8)
-        self.conv40 = ConvBlock(f*8, f*16)
+        self.maxpool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
-        self.pool = nn.MaxPool2d(2)
+        self.att3 = AttentionGate(512, 256, 128)
+        self.dconv_up3 = DoubleConv(512 + 256, 256)
 
-        # === Decoder (canais corrigidos) ===
-        self.conv01 = ConvBlock(f + f, f)
-        self.conv11 = ConvBlock(f*2 + f*2, f*2)
-        self.conv21 = ConvBlock(f*4 + f*4, f*4)
-        self.conv31 = ConvBlock(f*8 + f*8, f*8)
+        self.att2 = AttentionGate(256, 128, 64)
+        self.dconv_up2 = DoubleConv(256 + 128, 128)
 
-        self.conv02 = ConvBlock(f + f + f, f)
-        self.conv12 = ConvBlock(f*2 + f*2 + f*2, f*2)
-        self.conv22 = ConvBlock(f*4 + f*4 + f*4, f*4)
+        self.att1 = AttentionGate(128, 64, 32)
+        self.dconv_up1 = DoubleConv(128 + 64, 64)
 
-        self.conv03 = ConvBlock(f + f + f + f, f)
-        self.conv13 = ConvBlock(f*2 + f*2 + f*2 + f*2, f*2)
-
-        self.conv04 = ConvBlock(f + f + f + f + f, f)
-
-        # Upsampling
-        self.up10 = UpBlock(f*2, f)
-        self.up20 = UpBlock(f*4, f*2)
-        self.up30 = UpBlock(f*8, f*4)
-        self.up40 = UpBlock(f*16, f*8)
-
-        # Deep Supervision heads
-        self.final1 = nn.Conv2d(f, out_channels, 1)
-        self.final2 = nn.Conv2d(f, out_channels, 1)
-        self.final3 = nn.Conv2d(f, out_channels, 1)
-        self.final4 = nn.Conv2d(f, out_channels, 1)
+        self.conv_last = nn.Conv2d(64, 1, kernel_size=1)
 
     def forward(self, x):
-        # Encoder
-        x00 = self.conv00(x)
-        x10 = self.conv10(self.pool(x00))
-        x20 = self.conv20(self.pool(x10))
-        x30 = self.conv30(self.pool(x20))
-        x40 = self.conv40(self.pool(x30))
+        conv1 = self.dconv_down1(x)
+        x = self.maxpool(conv1)
 
-        # Decoder
-        x01 = self.conv01(torch.cat([x00, self.up10(x10)], dim=1))
-        x11 = self.conv11(torch.cat([x10, self.up20(x20)], dim=1))
-        x21 = self.conv21(torch.cat([x20, self.up30(x30)], dim=1))
-        x31 = self.conv31(torch.cat([x30, self.up40(x40)], dim=1))
+        conv2 = self.dconv_down2(x)
+        x = self.maxpool(conv2)
 
-        x02 = self.conv02(torch.cat([x00, x01, self.up10(x11)], dim=1))
-        x12 = self.conv12(torch.cat([x10, x11, self.up20(x21)], dim=1))
-        x22 = self.conv22(torch.cat([x20, x21, self.up30(x31)], dim=1))
+        conv3 = self.dconv_down3(x)
+        x = self.maxpool(conv3)
 
-        x03 = self.conv03(torch.cat([x00, x01, x02, self.up10(x12)], dim=1))
-        x13 = self.conv13(torch.cat([x10, x11, x12, self.up20(x22)], dim=1))
+        conv4 = self.dconv_down4(x)
 
-        x04 = self.conv04(torch.cat([x00, x01, x02, x03, self.up10(x13)], dim=1))
+        x = self.upsample(conv4)
+        att3 = self.att3(x, conv3)
+        x = torch.cat([x, att3], dim=1)
+        x = self.dconv_up3(x)
 
-        if self.deep_supervision:
-            return [
-                torch.sigmoid(self.final1(x01)),
-                torch.sigmoid(self.final2(x02)),
-                torch.sigmoid(self.final3(x03)),
-                torch.sigmoid(self.final4(x04)),
-            ]
-        else:
-            return torch.sigmoid(self.final4(x04))
+        x = self.upsample(x)
+        att2 = self.att2(x, conv2)
+        x = torch.cat([x, att2], dim=1)
+        x = self.dconv_up2(x)
+
+        x = self.upsample(x)
+        att1 = self.att1(x, conv1)
+        x = torch.cat([x, att1], dim=1)
+        x = self.dconv_up1(x)
+
+        return torch.sigmoid(self.conv_last(x))

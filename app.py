@@ -2,7 +2,7 @@ import streamlit as st
 import torch
 import numpy as np
 from PIL import Image, UnidentifiedImageError
-from rede2 import UNetPlusPlus
+from rede import AttentionUNet
 from transforms import get_inference_transform
 import io
 import base64
@@ -11,7 +11,6 @@ import time
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-import os
 
 # ==========================================
 # 🦷 CONFIGURAÇÃO INICIAL
@@ -22,17 +21,16 @@ st.set_page_config(
     layout="wide"
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-default_banner = os.path.join(BASE_DIR, "assets", "dente5.png")
+default_banner = r"D:\\OneDrive\\Documentos\\testeModularizado\\dente5.png"
 
 # ==========================================
 # ⚙️ CARREGAR MODELO
 # ==========================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = UNetPlusPlus(in_channels=1, out_channels=1).to(device)
+model = AttentionUNet().to(device)
 model.load_state_dict(
-    torch.load("UNetPlusPlus_final_trained.pt", map_location=device)
+    torch.load("AttUNet_final_trained.pt", map_location=device)
 )
 model.eval()
 
@@ -47,7 +45,9 @@ for key, default_value in {
     "mask_for_download": None,
     "processing": False,
     "show_results": False,
-    "show_clear_success": False
+    "uploader_key": 0,
+    "show_clear_success": False,
+    "clear_stage": 0,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
@@ -67,13 +67,14 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.image(default_banner, use_column_width=True)
+    st.image(default_banner, width="stretch")
     st.divider()
     st.header("UPLOAD DA RADIOGRAFIA")
 
     uploaded_file = st.file_uploader(
         "SELECIONE UMA RADIOGRAFIA",
-        type=["png", "jpg", "jpeg"]
+        type=["png", "jpg", "jpeg"],
+        key=f"uploader_{st.session_state.uploader_key}"
     )
 
     if uploaded_file is None and st.session_state.radiografia is not None:
@@ -81,6 +82,7 @@ with st.sidebar:
         st.session_state.mask = None
         st.session_state.mask_for_download = None
         st.session_state.show_results = False
+        st.session_state.clear_stage = 0
 
     if uploaded_file:
         try:
@@ -88,6 +90,7 @@ with st.sidebar:
             st.session_state.show_results = False
             st.session_state.mask = None
             st.session_state.mask_for_download = None
+            st.session_state.clear_stage = 0
         except UnidentifiedImageError:
             st.error("Arquivo inválido. Tente PNG ou JPG.")
 
@@ -95,7 +98,7 @@ with st.sidebar:
         st.image(
             st.session_state.radiografia,
             caption="Pré-visualização",
-            use_column_width=True
+            width="stretch"
         )
 
     col1, col2 = st.columns(2)
@@ -110,11 +113,22 @@ with st.sidebar:
 
     with col2:
         if st.button("Limpar", use_container_width=True):
-            st.session_state.radiografia = None
-            st.session_state.mask = None
-            st.session_state.mask_for_download = None
-            st.session_state.show_results = False
-            st.session_state.show_clear_success = True
+            if st.session_state.clear_stage == 0:
+                st.session_state.mask = None
+                st.session_state.mask_for_download = None
+                st.session_state.show_results = False
+                st.session_state.show_clear_success = True
+                st.session_state.clear_stage = 1
+            else:
+                st.session_state.radiografia = None
+                st.session_state.mask = None
+                st.session_state.mask_for_download = None
+                st.session_state.show_results = False
+                st.session_state.uploader_key += 1
+                st.session_state.clear_stage = 0
+                st.session_state.show_clear_success = True
+                st.success("Radiografia removida com sucesso ✅")
+                st.rerun()
 
     st.divider()
     st.caption("Desenvolvido para fins acadêmicos — OdontoVision © 2025")
@@ -139,7 +153,7 @@ st.markdown(
 # ==========================================
 # 🚀 MENSAGEM DE SUCESSO
 # ==========================================
-if st.session_state.show_clear_success:
+if st.session_state.show_clear_success and st.session_state.clear_stage == 1:
     st.success("Segmentação removida com sucesso ✅")
     st.session_state.show_clear_success = False
 
@@ -156,16 +170,12 @@ if st.session_state.radiografia and st.session_state.show_results:
             augmented = transform(image=img_np)
             input_tensor = augmented["image"].unsqueeze(0).to(device)
 
-            # 🔹 Warm-up
-            with torch.no_grad():
-                _ = model(input_tensor)
-
-            # 🔹 Medição do tempo computacional
             with torch.no_grad():
                 if device.type == "cuda":
                     torch.cuda.synchronize()
 
                 start_time = time.perf_counter()
+
                 pred = model(input_tensor)
 
                 if device.type == "cuda":
@@ -175,12 +185,9 @@ if st.session_state.radiografia and st.session_state.show_results:
 
                 tempo_computacional = end_time - start_time
                 print(
-                    f"[INFO] Tempo computacional de inferência: "
+                    f"[INFO] Attention U-Net — Tempo computacional de inferência: "
                     f"{tempo_computacional*1000:.2f} ms"
                 )
-
-                if isinstance(pred, list):
-                    pred = pred[-1]
 
                 mask = (
                     (pred.squeeze().cpu().numpy() > 0.5)
@@ -244,14 +251,12 @@ def gerar_pdf(radiografia, mask, logo_path):
 
     c.setFont("Helvetica", 11)
     c.drawCentredString(
-        width / 2,
-        30,
+        width / 2, 30,
         "Relatório gerado automaticamente — OdontoVision © 2025"
     )
 
     c.showPage()
     c.save()
-
     pdf_buffer.seek(0)
     return pdf_buffer
 
@@ -266,13 +271,13 @@ if st.session_state.mask is not None and st.session_state.radiografia is not Non
         st.image(
             st.session_state.radiografia,
             caption="Radiografia Original",
-            use_column_width=True
+            width="stretch"
         )
     with col2:
         st.image(
             st.session_state.mask,
             caption="Máscara Segmentada",
-            use_column_width=True
+            width="stretch"
         )
 
     pdf_buffer = gerar_pdf(
