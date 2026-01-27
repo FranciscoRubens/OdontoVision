@@ -2,7 +2,7 @@ import streamlit as st
 import torch
 import numpy as np
 from PIL import Image, UnidentifiedImageError
-from rede import AttentionUNet
+from rede2 import AttentionUNet
 from transforms import get_inference_transform
 import io
 import base64
